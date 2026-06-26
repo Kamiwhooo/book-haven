@@ -9,11 +9,13 @@ async function groqSmartSearch(query: string): Promise<string[]> {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama3-8b-8192',
-        messages: [{ role: 'user', content: `You are a book search expert. Given this search query: "${query}", generate 4 alternative search variations to find this book on Internet Archive. Include: exact title, title with underscores replacing spaces, author+title if known, and a short version. Return ONLY a JSON array of strings, nothing else.` }],
-        max_tokens: 150, temperature: 0.3,
+        model: 'openai/gpt-oss-20b',
+        messages: [{ role: 'user', content: `You are a book search expert. Given this search query: "${query}", generate 4 alternative search variations to find this book on Internet Archive. Include: exact title, title with underscores replacing spaces, author+title if known, and a short version. Return ONLY a JSON array of strings, nothing else. Example: ["good girl bad blood", "good_girl_bad_blood", "holly jackson good girl bad blood", "good girl bad blood holly jackson"]` }],
+        max_tokens: 150,
+        temperature: 0.2,
       }),
     })
+    if (!res.ok) throw new Error(`Groq error: ${res.status}`)
     const data = await res.json()
     const content = data.choices?.[0]?.message?.content?.trim()
     const parsed = JSON.parse(content.replace(/```json|```/g, '').trim())
