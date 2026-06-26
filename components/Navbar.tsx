@@ -4,7 +4,7 @@ import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
 
 export default function Navbar() {
-  const { user, signOut } = useAuth()
+  const { user, signOut, loading } = useAuth()
   const router = useRouter()
 
   const handleSignOut = async () => {
@@ -21,30 +21,23 @@ export default function Navbar() {
         </Link>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-          {user ? (
+          {!loading && user ? (
             <>
               <Link href="/library" style={{ textDecoration: 'none', color: '#FF69B4', fontWeight: 700, fontSize: '0.95rem' }}>
                 📚 My Library
               </Link>
               <span style={{ color: '#FF69B4', fontSize: '0.85rem' }}>
-                💕 {user.email?.split('@')[0]}
+                💕 {user.user_metadata?.name?.split(' ')[0] || user.email?.split('@')[0]}
               </span>
               <button onClick={handleSignOut} className="btn-pink" style={{ padding: '8px 20px', fontSize: '0.85rem' }}>
                 Sign Out
               </button>
             </>
-          ) : (
-            <>
-              <Link href="/login" style={{ textDecoration: 'none', color: '#FF69B4', fontWeight: 700 }}>
-                Sign In
-              </Link>
-              <Link href="/register">
-                <button className="btn-pink" style={{ padding: '8px 20px', fontSize: '0.85rem' }}>
-                  Join Us 🎀
-                </button>
-              </Link>
-            </>
-          )}
+          ) : !loading && !user ? (
+            <button onClick={() => router.push('/login')} className="btn-pink" style={{ padding: '10px 24px', fontSize: '0.9rem' }}>
+              Sign In 🎀
+            </button>
+          ) : null}
         </div>
       </div>
     </nav>

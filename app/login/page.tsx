@@ -1,11 +1,21 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/context/AuthContext'
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const { user, loading: authLoading } = useAuth()
+  const router = useRouter()
+
+  // If already logged in, go home immediately
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace('/')
+    }
+  }, [user, authLoading, router])
 
   const handleGoogle = async () => {
     setLoading(true)
@@ -21,6 +31,9 @@ export default function LoginPage() {
       setLoading(false)
     }
   }
+
+  // Don't render while checking auth or if already logged in
+  if (authLoading || user) return null
 
   return (
     <div style={{ minHeight: '90vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#FFF0F5', padding: '24px' }}>
@@ -57,8 +70,6 @@ export default function LoginPage() {
             opacity: loading ? 0.7 : 1,
             fontFamily: 'Nunito, sans-serif',
           }}
-          onMouseEnter={e => { if (!loading) (e.currentTarget.style.borderColor = '#FF69B4'); (e.currentTarget.style.boxShadow = '0 6px 20px rgba(255,105,180,0.35)') }}
-          onMouseLeave={e => { (e.currentTarget.style.borderColor = '#FFD6E7'); (e.currentTarget.style.boxShadow = '0 4px 15px rgba(255,105,180,0.2)') }}
         >
           {loading ? (
             <>
