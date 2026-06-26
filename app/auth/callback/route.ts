@@ -15,7 +15,9 @@ export async function GET(request: NextRequest) {
     if (!error) {
       return NextResponse.redirect(`${origin}${next}`)
     }
+    console.error('Auth exchange error:', error)
   }
 
+  // Something went wrong, redirect to login with error
   return NextResponse.redirect(`${origin}/login?error=auth_failed`)
 }

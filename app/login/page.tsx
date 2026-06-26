@@ -10,30 +10,53 @@ export default function LoginPage() {
   const { user, loading: authLoading } = useAuth()
   const router = useRouter()
 
-  // If already logged in, go home immediately
   useEffect(() => {
     if (!authLoading && user) {
       router.replace('/')
     }
   }, [user, authLoading, router])
 
+  // Check for error in URL params
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('error')) {
+      setError('Sign in failed. Please try again.')
+    }
+  }, [])
+
   const handleGoogle = async () => {
     setLoading(true)
     setError('')
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    })
-    if (error) {
-      setError(error.message)
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          },
+        },
+      })
+      if (error) throw error
+      // If data.url exists, redirect manually
+      if (data?.url) {
+        window.location.href = data.url
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to connect with Google')
       setLoading(false)
     }
   }
 
-  // Don't render while checking auth or if already logged in
-  if (authLoading || user) return null
+  if (authLoading || user) return (
+    <div style={{ minHeight: '90vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#FFF0F5' }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem' }} className="heart-float">🌸</div>
+        <p className="font-pacifico" style={{ color: '#FF1493', marginTop: '12px' }}>Loading...</p>
+      </div>
+    </div>
+  )
 
   return (
     <div style={{ minHeight: '90vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#FFF0F5', padding: '24px' }}>
@@ -74,7 +97,7 @@ export default function LoginPage() {
           {loading ? (
             <>
               <span style={{ fontSize: '1.3rem' }}>🌸</span>
-              <span>Connecting...</span>
+              <span>Redirecting to Google...</span>
             </>
           ) : (
             <>
