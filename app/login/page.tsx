@@ -16,7 +16,6 @@ export default function LoginPage() {
     }
   }, [user, authLoading, router])
 
-  // Check for error in URL params
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get('error')) {
@@ -28,21 +27,13 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
     try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
+          redirectTo: `${window.location.origin}/`,
         },
       })
       if (error) throw error
-      // If data.url exists, redirect manually
-      if (data?.url) {
-        window.location.href = data.url
-      }
     } catch (err: any) {
       setError(err.message || 'Failed to connect with Google')
       setLoading(false)
@@ -95,10 +86,7 @@ export default function LoginPage() {
           }}
         >
           {loading ? (
-            <>
-              <span style={{ fontSize: '1.3rem' }}>🌸</span>
-              <span>Redirecting to Google...</span>
-            </>
+            <><span style={{ fontSize: '1.3rem' }}>🌸</span><span>Redirecting to Google...</span></>
           ) : (
             <>
               <svg width="22" height="22" viewBox="0 0 24 24">
