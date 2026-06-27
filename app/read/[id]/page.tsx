@@ -20,35 +20,30 @@ function ReaderContent({ id }: { id: string }) {
   const [pdfDoc, setPdfDoc] = useState<any>(null)
   const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1'))
   const [totalPages, setTotalPages] = useState(0)
-  const [scale, setScale] = useState(1.0)
   const [loading, setLoading] = useState(true)
   const [loadMsg, setLoadMsg] = useState('🌸 Loading your book...')
   const [loadProgress, setLoadProgress] = useState(0)
   const [error, setError] = useState('')
   const [darkMode, setDarkMode] = useState(false)
   const [book, setBook] = useState<BookMeta | null>(null)
-  const [saved, setSaved] = useState(false)
-  const [scrollMode, setScrollMode] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<'idle'|'saved'|'error'>('idle')
+  const [scrollMode, setScrollMode] = useState(true)
   const [fullscreen, setFullscreen] = useState(false)
-  const [showControls, setShowControls] = useState(true)
-  const [pagesRendered, setPagesRendered] = useState<Set<number>>(new Set())
-  const [isMobile, setIsMobile] = useState(false)
+  const [showBars, setShowBars] = useState(true)
+  const [pagesRendered, setPagesRendered] = useState(0)
+  const [showPanel, setShowPanel] = useState(false)
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null)
   const renderTaskRef = useRef<any>(null)
-  const controlsTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const hideTimerRef = useRef<NodeJS.Timeout | null>(null)
   const touchStartX = useRef(0)
   const touchStartY = useRef(0)
+  const lastTapTime = useRef(0)
   const pdfDocRef = useRef<any>(null)
-  const scrollRenderingRef = useRef(false)
+  const scrollRenderRef = useRef(false)
+  const currentPageRef = useRef(currentPage)
+  currentPageRef.current = currentPage
 
-  useEffect(() => {
-    const mobile = window.innerWidth < 768
-    setIsMobile(mobile)
-    if (mobile) { setScrollMode(true); setScale(0.65) }
-  }, [])
-
-  // Load PDF.js
   useEffect(() => {
     if (window.pdfjsLib) return
     const s = document.createElement('script')
@@ -58,28 +53,24 @@ function ReaderContent({ id }: { id: string }) {
   }, [])
 
   useEffect(() => {
-    fetch(`/api/books/${id}`).then(r => r.json()).then(d => setBook(d.book)).catch(() => {})
+    fetch(`/api/books/${id}`).then(r => r.json()).then(d => { if (d.book) setBook(d.book) }).catch(() => {})
   }, [id])
 
-  const waitForPDFJS = async () => {
-    let t = 0
-    while (!window.pdfjsLib && t < 50) { await new Promise(r => setTimeout(r, 200)); t++ }
-    if (!window.pdfjsLib) throw new Error('PDF.js failed to load')
-  }
-
   const loadPDF = useCallback(async () => {
-    setLoading(true); setError(''); setLoadProgress(0); setPagesRendered(new Set())
+    setLoading(true); setError(''); setLoadProgress(0); setPagesRendered(0)
+    scrollRenderRef.current = false
     try {
-      await waitForPDFJS()
-      setLoadMsg('🎀 Connecting to Internet Archive...'); setLoadProgress(20)
-      const proxyUrl = `/api/pdf?id=${encodeURIComponent(id)}`
-      setLoadMsg('🌸 Downloading pages...'); setLoadProgress(50)
+      let tries = 0
+      while (!window.pdfjsLib && tries < 60) { await new Promise(r => setTimeout(r, 200)); tries++ }
+      if (!window.pdfjsLib) throw new Error('PDF.js failed to load')
+      setLoadMsg('🎀 Connecting...'); setLoadProgress(20)
       const task = window.pdfjsLib.getDocument({
-        url: proxyUrl,
+        url: `/api/pdf?id=${encodeURIComponent(id)}`,
         cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
         cMapPacked: true,
       })
-      task.onProgress = (p: any) => { if (p.total) setLoadProgress(50 + Math.round((p.loaded/p.total)*40)) }
+      task.onProgress = (p: any) => { if (p.total) setLoadProgress(50 + Math.round((p.loaded / p.total) * 40)); setLoadMsg('🌸 Downloading...') }
+      setLoadProgress(50)
       const pdf = await task.promise
       pdfDocRef.current = pdf
       setPdfDoc(pdf)
@@ -102,115 +93,126 @@ function ReaderContent({ id }: { id: string }) {
     if (renderTaskRef.current) { try { renderTaskRef.current.cancel() } catch {} }
     try {
       const page = await doc.getPage(pageNum)
-      const containerW = canvas.parentElement?.clientWidth || window.innerWidth
-      const containerH = canvas.parentElement?.clientHeight || window.innerHeight
-      const defaultVP = page.getViewport({ scale: 1 })
-      const scaleW = (containerW - 40) / defaultVP.width
-      const scaleH = (containerH - 40) / defaultVP.height
-      const autoScale = Math.min(scaleW, scaleH, scale * 1.5)
-      const vp = page.getViewport({ scale: autoScale })
+      const w = (canvas.parentElement?.clientWidth || window.innerWidth) - 24
+      const h = (canvas.parentElement?.clientHeight || window.innerHeight) - 24
+      const vp1 = page.getViewport({ scale: 1 })
+      const s = Math.min(w / vp1.width, h / vp1.height, 2.5)
+      const vp = page.getViewport({ scale: s })
       canvas.width = vp.width; canvas.height = vp.height
       const ctx = canvas.getContext('2d')!
       ctx.filter = darkMode ? 'invert(0.85) hue-rotate(180deg)' : 'none'
-      const task = page.render({ canvasContext: ctx, viewport: vp })
-      renderTaskRef.current = task
-      await task.promise
+      const t = page.render({ canvasContext: ctx, viewport: vp })
+      renderTaskRef.current = t
+      await t.promise
     } catch (e: any) { if (e?.name !== 'RenderingCancelledException') console.error(e) }
-  }, [pdfDoc, scale, darkMode, scrollMode])
+  }, [pdfDoc, darkMode, scrollMode])
 
-  useEffect(() => { if (pdfDoc && !scrollMode) renderPage(currentPage) }, [pdfDoc, currentPage, scale, darkMode, scrollMode])
+  useEffect(() => { if (pdfDoc && !scrollMode) renderPage(currentPage) }, [pdfDoc, currentPage, darkMode, scrollMode])
 
-  // Scroll mode: render pages one by one into container
+  // Scroll mode render
   useEffect(() => {
-    if (!pdfDoc || !scrollMode || scrollRenderingRef.current) return
+    if (!pdfDoc || !scrollMode || scrollRenderRef.current) return
     const container = scrollContainerRef.current
     if (!container) return
     container.innerHTML = ''
-    setPagesRendered(new Set())
-    scrollRenderingRef.current = true
+    setPagesRendered(0)
+    scrollRenderRef.current = true
+    const startPage = parseInt(searchParams.get('page') || '1')
 
     const renderAll = async () => {
       const doc = pdfDocRef.current || pdfDoc
       for (let i = 1; i <= doc.numPages; i++) {
         const wrapper = document.createElement('div')
-        wrapper.style.cssText = 'margin-bottom:16px;display:flex;justify-content:center;padding:0 8px;'
+        wrapper.style.cssText = 'margin-bottom:10px;display:flex;justify-content:center;'
         wrapper.dataset.page = String(i)
         const canvas = document.createElement('canvas')
-        canvas.style.cssText = `max-width:100%;border-radius:8px;box-shadow:0 4px 20px rgba(255,20,147,0.12);background:${darkMode?'#111':'white'};`
+        canvas.style.cssText = `max-width:100%;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,0.1);background:${darkMode ? '#111' : 'white'};display:block;`
         wrapper.appendChild(canvas)
         container.appendChild(wrapper)
         try {
           const page = await doc.getPage(i)
-          const containerW = container.clientWidth - 32
-          const defaultVP = page.getViewport({ scale: 1 })
-          const fitScale = Math.min(containerW / defaultVP.width, 2.5)
-          const vp = page.getViewport({ scale: fitScale })
+          const w = container.clientWidth - 12
+          const vp1 = page.getViewport({ scale: 1 })
+          const vp = page.getViewport({ scale: Math.min(w / vp1.width, 3) })
           canvas.width = vp.width; canvas.height = vp.height
           const ctx = canvas.getContext('2d')!
           ctx.filter = darkMode ? 'invert(0.85) hue-rotate(180deg)' : 'none'
           await page.render({ canvasContext: ctx, viewport: vp }).promise
-          setPagesRendered(prev => new Set([...prev, i]))
+          setPagesRendered(i)
+          // Jump to saved page
+          if (i === Math.min(startPage, 3) && startPage > 1) {
+            setTimeout(() => container.querySelector(`[data-page="${startPage}"]`)?.scrollIntoView(), 100)
+          }
         } catch {}
       }
-      scrollRenderingRef.current = false
+      scrollRenderRef.current = false
     }
     renderAll()
   }, [pdfDoc, scrollMode, darkMode])
 
-  // Track current page in scroll mode
+  // Track page in scroll
   useEffect(() => {
     if (!scrollMode) return
     const container = scrollContainerRef.current
     if (!container) return
-    const obs = new IntersectionObserver((entries) => {
-      entries.forEach(e => {
-        if (e.isIntersecting && (e.intersectionRatio > 0.3)) {
-          setCurrentPage(parseInt((e.target as HTMLElement).dataset.page || '1'))
-        }
+    let ticking = false
+    const onScroll = () => {
+      if (ticking) return
+      ticking = true
+      requestAnimationFrame(() => {
+        const wrappers = Array.from(container.querySelectorAll('[data-page]'))
+        const cTop = container.getBoundingClientRect().top
+        let best = 1, bestDist = Infinity
+        wrappers.forEach(w => {
+          const d = Math.abs(w.getBoundingClientRect().top - cTop)
+          if (d < bestDist) { bestDist = d; best = parseInt((w as HTMLElement).dataset.page || '1') }
+        })
+        setCurrentPage(best)
+        ticking = false
       })
-    }, { root: container, threshold: 0.3 })
-    const wrappers = container.querySelectorAll('[data-page]')
-    wrappers.forEach(w => obs.observe(w))
-    return () => obs.disconnect()
+    }
+    container.addEventListener('scroll', onScroll, { passive: true })
+    return () => container.removeEventListener('scroll', onScroll)
   }, [pagesRendered, scrollMode])
 
-  // Auto-save every 2s
+  // Save
   const saveProgress = useCallback(async (silent = true) => {
-    if (!user || !book || !totalPages) return
+    if (!user || !book) return
     try {
       const res = await fetch('/api/progress', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ book, current_page: currentPage, total_pages: totalPages, user_id: user.id }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ book, current_page: currentPageRef.current, total_pages: totalPages, user_id: user.id }),
       })
-      if (res.ok && !silent) { setSaved(true); setTimeout(() => setSaved(false), 2000) }
-    } catch {}
-  }, [user, book, currentPage, totalPages])
+      if (res.ok) {
+        setSaveStatus('saved')
+        setTimeout(() => setSaveStatus('idle'), silent ? 800 : 2000)
+      } else {
+        const d = await res.json()
+        console.error('Save error:', d.error)
+        setSaveStatus('error')
+        setTimeout(() => setSaveStatus('idle'), 3000)
+      }
+    } catch { setSaveStatus('error'); setTimeout(() => setSaveStatus('idle'), 3000) }
+  }, [user, book, totalPages])
 
   useEffect(() => {
     if (saveTimerRef.current) clearInterval(saveTimerRef.current)
-    saveTimerRef.current = setInterval(() => saveProgress(true), 2000)
+    saveTimerRef.current = setInterval(() => { if (totalPages > 0 && user) saveProgress(true) }, 3000)
     return () => { if (saveTimerRef.current) clearInterval(saveTimerRef.current) }
-  }, [saveProgress])
+  }, [saveProgress, totalPages, user])
 
-  // Controls auto-hide in fullscreen
-  const resetControlsTimer = useCallback(() => {
-    setShowControls(true)
-    if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current)
-    if (fullscreen) controlsTimerRef.current = setTimeout(() => setShowControls(false), 3500)
+  // Bars auto-hide in fullscreen
+  const resetHide = useCallback(() => {
+    setShowBars(true)
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    if (fullscreen) hideTimerRef.current = setTimeout(() => setShowBars(false), 3000)
   }, [fullscreen])
 
-  useEffect(() => { resetControlsTimer() }, [fullscreen])
+  useEffect(() => { resetHide() }, [fullscreen])
 
-  // Fullscreen
   const toggleFullscreen = useCallback(() => {
-    if (!fullscreen) {
-      document.documentElement.requestFullscreen?.().catch(() => {})
-      setFullscreen(true)
-    } else {
-      document.exitFullscreen?.().catch(() => {})
-      setFullscreen(false)
-    }
+    if (!fullscreen) { document.documentElement.requestFullscreen?.().catch(() => {}); setFullscreen(true) }
+    else { document.exitFullscreen?.().catch(() => {}); setFullscreen(false) }
   }, [fullscreen])
 
   useEffect(() => {
@@ -219,205 +221,180 @@ function ReaderContent({ id }: { id: string }) {
     return () => document.removeEventListener('fullscreenchange', h)
   }, [])
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (scrollMode) return
-      if (['ArrowRight','ArrowDown',' '].includes(e.key)) { if (currentPage < totalPages) setCurrentPage(p => p+1); e.preventDefault() }
-      else if (['ArrowLeft','ArrowUp'].includes(e.key)) { if (currentPage > 1) setCurrentPage(p => p-1); e.preventDefault() }
-      else if (e.key === 'f' || e.key === 'F') toggleFullscreen()
-    }
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [currentPage, totalPages, scrollMode, toggleFullscreen])
-
-  // Touch swipe
+  // Touch
   const onTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX
     touchStartY.current = e.touches[0].clientY
-    resetControlsTimer()
   }
   const onTouchEnd = (e: React.TouchEvent) => {
-    if (scrollMode) return
     const dx = e.changedTouches[0].clientX - touchStartX.current
     const dy = e.changedTouches[0].clientY - touchStartY.current
-    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
-      if (dx < 0 && currentPage < totalPages) setCurrentPage(p => p+1)
-      else if (dx > 0 && currentPage > 1) setCurrentPage(p => p-1)
+    const now = Date.now()
+    // Double tap = toggle bars
+    if (now - lastTapTime.current < 280 && Math.abs(dx) < 15 && Math.abs(dy) < 15) {
+      setShowBars(v => !v); setShowPanel(false); lastTapTime.current = 0; return
+    }
+    lastTapTime.current = now
+    resetHide()
+    // Swipe pages (page mode)
+    if (!scrollMode && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
+      if (dx < 0 && currentPageRef.current < totalPages) setCurrentPage(p => p + 1)
+      else if (dx > 0 && currentPageRef.current > 1) setCurrentPage(p => p - 1)
     }
   }
 
-  // Click zones (left 30% = prev, right 30% = next, middle = toggle controls)
-  const handleClick = (e: React.MouseEvent) => {
-    resetControlsTimer()
+  // Click zones in page mode
+  const onClick = (e: React.MouseEvent) => {
     if (scrollMode) return
     const x = e.clientX, w = window.innerWidth
-    if (x < w * 0.3) { if (currentPage > 1) setCurrentPage(p => p-1) }
-    else if (x > w * 0.7) { if (currentPage < totalPages) setCurrentPage(p => p+1) }
-    else setShowControls(v => !v)
+    resetHide()
+    if (x < w * 0.28 && currentPageRef.current > 1) setCurrentPage(p => p - 1)
+    else if (x > w * 0.72 && currentPageRef.current < totalPages) setCurrentPage(p => p + 1)
+    else { setShowBars(v => !v); setShowPanel(false) }
   }
 
-  const goTo = (page: number) => {
-    const p = Math.max(1, Math.min(page, totalPages))
-    setCurrentPage(p)
-    if (scrollMode && scrollContainerRef.current) {
-      scrollContainerRef.current.querySelector(`[data-page="${p}"]`)?.scrollIntoView({ behavior: 'smooth' })
-    }
+  const switchMode = () => { scrollRenderRef.current = false; setScrollMode(v => !v); setPagesRendered(0) }
+  const goTo = (p: number) => {
+    const pg = Math.max(1, Math.min(p, totalPages))
+    setCurrentPage(pg)
+    if (scrollMode && scrollContainerRef.current)
+      scrollContainerRef.current.querySelector(`[data-page="${pg}"]`)?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const switchMode = () => {
-    scrollRenderingRef.current = false
-    setScrollMode(v => !v)
-    setPagesRendered(new Set())
-  }
-
-  const pct = totalPages ? Math.round((currentPage/totalPages)*100) : 0
+  const pct = totalPages ? Math.round((currentPage / totalPages) * 100) : 0
   const bg = darkMode ? '#0d0d0d' : '#FFF0F5'
-  const barBg = darkMode ? '#1a0a0a' : 'white'
-  const barBorder = darkMode ? '#3d1020' : '#FFD6E7'
+  const barBg = darkMode ? 'rgba(20,5,5,0.96)' : 'rgba(255,255,255,0.97)'
+  const border = darkMode ? '#3d1020' : '#FFD6E7'
+
+  const saveBtnStyle = saveStatus === 'saved'
+    ? { bg: 'linear-gradient(135deg,#FF69B4,#FF1493)', color: 'white', label: '✅ Saved' }
+    : saveStatus === 'error'
+    ? { bg: '#FFD6E7', color: '#C7006E', label: '❌ Retry' }
+    : { bg: '#FFD6E7', color: '#4A1942', label: '💾 Save' }
 
   return (
-    <div style={{ height:'100vh', background:bg, display:'flex', flexDirection:'column', overflow:'hidden', userSelect:'none', position:'relative' }}
-      onMouseMove={resetControlsTimer} onClick={handleClick} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+    <div style={{ height: '100vh', background: bg, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', userSelect: 'none' }}
+      onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} onMouseMove={resetHide} onClick={onClick}>
 
       {/* TOP BAR */}
-      <div style={{ background:barBg, borderBottom:`2px solid ${barBorder}`, padding:'8px 14px', display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', zIndex:60, flexShrink:0,
-        transition:'opacity 0.3s, transform 0.3s', opacity:showControls?1:0, transform:showControls?'translateY(0)':'translateY(-100%)', pointerEvents:showControls?'auto':'none' }}>
-
-        <button onClick={(e)=>{e.stopPropagation();router.back()}}
-          style={{ background:'none', border:'none', color:'#FF69B4', fontWeight:700, cursor:'pointer', fontSize:'0.9rem', flexShrink:0, padding:'4px 8px' }}>← Back</button>
-
-        {book && <span style={{ fontSize:'0.8rem', fontWeight:700, color:'#FF1493', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:isMobile?'120px':'200px' }}>
-          📚 {book.title}
-        </span>}
-
-        <div style={{ display:'flex', alignItems:'center', gap:'6px', marginLeft:'auto' }} onClick={e=>e.stopPropagation()}>
-          {/* Mode toggle */}
-          <button onClick={switchMode} style={{ background:scrollMode?'linear-gradient(135deg,#FF69B4,#FF1493)':'#FFD6E7', color:scrollMode?'white':'#4A1942', border:'none', borderRadius:'8px', padding:'6px 10px', cursor:'pointer', fontSize:'0.72rem', fontWeight:700, whiteSpace:'nowrap' }}>
-            {scrollMode ? '📜 Scroll' : '📄 Pages'}
-          </button>
-
-          {!scrollMode && <>
-            <button onClick={()=>setScale(s=>Math.max(0.4,s-0.15))} style={{ background:'#FFD6E7', border:'none', borderRadius:'8px', padding:'6px 10px', cursor:'pointer', fontWeight:700, color:'#4A1942', fontSize:'0.9rem' }}>−</button>
-            <span style={{ fontSize:'0.72rem', fontWeight:700, minWidth:'34px', textAlign:'center', color:darkMode?'#FFB6C1':'#4A1942' }}>{Math.round(scale*100)}%</span>
-            <button onClick={()=>setScale(s=>Math.min(3,s+0.15))} style={{ background:'#FFD6E7', border:'none', borderRadius:'8px', padding:'6px 10px', cursor:'pointer', fontWeight:700, color:'#4A1942', fontSize:'0.9rem' }}>+</button>
-          </>}
-
-          <button onClick={()=>setDarkMode(!darkMode)} style={{ background:darkMode?'#FF69B4':'#FFD6E7', border:'none', borderRadius:'8px', padding:'6px 10px', cursor:'pointer', fontSize:'0.9rem' }}>
-            {darkMode?'☀️':'🌙'}
-          </button>
-
-          <button onClick={toggleFullscreen} style={{ background:fullscreen?'linear-gradient(135deg,#FF69B4,#FF1493)':'#FFD6E7', color:fullscreen?'white':'#4A1942', border:'none', borderRadius:'8px', padding:'6px 10px', cursor:'pointer', fontWeight:700, fontSize:'0.85rem' }}>
-            {fullscreen?'⊠':'⛶'}
-          </button>
-
-          <button onClick={(e)=>{e.stopPropagation();saveProgress(false)}}
-            style={{ background:saved?'linear-gradient(135deg,#FF69B4,#FF1493)':'#FFD6E7', color:saved?'white':'#4A1942', border:'none', borderRadius:'8px', padding:'6px 10px', cursor:'pointer', fontSize:'0.72rem', fontWeight:700, whiteSpace:'nowrap', transition:'all 0.3s' }}>
-            {saved?'💾 Saved!':'💾 Save'}
-          </button>
+      <div style={{ background: barBg, borderBottom: `1px solid ${border}`, backdropFilter: 'blur(8px)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, zIndex: 60, transition: 'transform 0.3s,opacity 0.3s', transform: showBars ? 'translateY(0)' : 'translateY(-100%)', opacity: showBars ? 1 : 0, pointerEvents: showBars ? 'auto' : 'none' }}>
+        <button onClick={(e) => { e.stopPropagation(); router.back() }} style={{ background: 'none', border: 'none', color: '#FF69B4', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', padding: '4px 6px', flexShrink: 0 }}>← Back</button>
+        {book && <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FF1493', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{book.title}</span>}
+        <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+          <button onClick={switchMode} style={{ background: scrollMode ? 'linear-gradient(135deg,#FF69B4,#FF1493)' : '#FFD6E7', color: scrollMode ? 'white' : '#4A1942', border: 'none', borderRadius: '8px', padding: '6px 8px', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700 }}>{scrollMode ? '📜' : '📄'}</button>
+          <button onClick={() => setDarkMode(!darkMode)} style={{ background: darkMode ? '#FF69B4' : '#FFD6E7', border: 'none', borderRadius: '8px', padding: '6px 8px', cursor: 'pointer', fontSize: '0.85rem' }}>{darkMode ? '☀️' : '🌙'}</button>
+          <button onClick={toggleFullscreen} style={{ background: fullscreen ? 'linear-gradient(135deg,#FF69B4,#FF1493)' : '#FFD6E7', color: fullscreen ? 'white' : '#4A1942', border: 'none', borderRadius: '8px', padding: '6px 8px', cursor: 'pointer', fontSize: '0.85rem' }}>{fullscreen ? '⊠' : '⛶'}</button>
+          <button onClick={(e) => { e.stopPropagation(); saveProgress(false) }} style={{ background: saveBtnStyle.bg, color: saveBtnStyle.color, border: 'none', borderRadius: '8px', padding: '6px 8px', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700, transition: 'all 0.3s', whiteSpace: 'nowrap' }}>{saveBtnStyle.label}</button>
         </div>
       </div>
 
-      {/* Reading progress bar */}
-      {totalPages > 0 && (
-        <div style={{ height:'3px', background:darkMode?'#2d0a1a':'#FFD6E7', flexShrink:0 }}>
-          <div style={{ height:'100%', width:`${pct}%`, background:'linear-gradient(90deg,#FF69B4,#FF1493)', transition:'width 0.4s' }} />
-        </div>
-      )}
+      {/* Progress strip */}
+      {totalPages > 0 && <div style={{ height: '3px', background: darkMode ? '#2d0a1a' : '#FFD6E7', flexShrink: 0 }}><div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#FF69B4,#FF1493)', transition: 'width 0.5s' }} /></div>}
 
-      {/* MAIN AREA */}
-      <div style={{ flex:1, overflow:'hidden', position:'relative' }}>
-
-        {/* Loading */}
+      {/* MAIN */}
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {loading && (
-          <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:bg, zIndex:10 }}>
-            <div style={{ fontSize:'4rem', marginBottom:'16px' }} className="heart-float">🌸</div>
-            <p className="font-pacifico" style={{ color:'#FF1493', fontSize:'1.2rem', marginBottom:'16px' }}>{loadMsg}</p>
-            <div style={{ width:'240px', height:'8px', background:'#FFD6E7', borderRadius:'4px', overflow:'hidden' }}>
-              <div style={{ height:'100%', width:`${loadProgress}%`, background:'linear-gradient(90deg,#FF69B4,#FF1493)', transition:'width 0.5s' }} />
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: bg, zIndex: 10 }}>
+            <div style={{ fontSize: '3.5rem', marginBottom: '16px' }} className="heart-float">🌸</div>
+            <p className="font-pacifico" style={{ color: '#FF1493', fontSize: '1.2rem', marginBottom: '16px' }}>{loadMsg}</p>
+            <div style={{ width: '240px', height: '8px', background: '#FFD6E7', borderRadius: '4px', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${loadProgress}%`, background: 'linear-gradient(90deg,#FF69B4,#FF1493)', transition: 'width 0.5s' }} />
             </div>
-            <p style={{ color:'#FFB6C1', fontSize:'0.8rem', marginTop:'10px' }}>🎀 Preparing your reading experience...</p>
           </div>
         )}
-
-        {/* Error */}
-        {error && (
-          <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'24px', textAlign:'center' }}>
-            <div style={{ fontSize:'4rem', marginBottom:'14px' }}>😢</div>
-            <h3 className="font-pacifico" style={{ color:'#FF1493', fontSize:'1.3rem', marginBottom:'10px' }}>Trouble loading this book</h3>
-            <p style={{ color:'#FF91A4', maxWidth:'360px', marginBottom:'6px' }}>This book may not have a free PDF available on Internet Archive.</p>
-            <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', justifyContent:'center', marginTop:'16px' }}>
-              <button className="btn-pink" onClick={(e)=>{e.stopPropagation();loadPDF()}}>🔄 Try Again</button>
-              <a href={`https://archive.org/details/${id}`} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()}>
-                <button style={{ background:'white', border:'2px solid #FF69B4', borderRadius:'50px', padding:'12px 18px', color:'#FF1493', fontWeight:700, cursor:'pointer', fontFamily:'Nunito,sans-serif' }}>🌐 Archive.org</button>
+        {error && !loading && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center' }}>
+            <div style={{ fontSize: '3.5rem', marginBottom: '12px' }}>😢</div>
+            <h3 className="font-pacifico" style={{ color: '#FF1493', fontSize: '1.2rem', marginBottom: '10px' }}>Trouble loading this book</h3>
+            <p style={{ color: '#FF91A4', maxWidth: '300px', marginBottom: '20px', fontSize: '0.9rem' }}>This book may not have a free PDF on Internet Archive.</p>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button className="btn-pink" onClick={(e) => { e.stopPropagation(); loadPDF() }}>🔄 Retry</button>
+              <a href={`https://archive.org/details/${id}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
+                <button style={{ background: 'white', border: '2px solid #FF69B4', borderRadius: '50px', padding: '10px 16px', color: '#FF1493', fontWeight: 700, cursor: 'pointer', fontFamily: 'Nunito,sans-serif' }}>🌐 View on Archive</button>
               </a>
-              <button onClick={(e)=>{e.stopPropagation();router.push('/')}} style={{ background:'white', border:'2px solid #FFD6E7', borderRadius:'50px', padding:'12px 18px', color:'#FF69B4', fontWeight:700, cursor:'pointer', fontFamily:'Nunito,sans-serif' }}>🔍 Search Again</button>
             </div>
           </div>
         )}
-
-        {/* SCROLL MODE */}
         {!loading && !error && scrollMode && (
-          <div ref={scrollContainerRef} style={{ height:'100%', overflowY:'auto', padding:'12px 8px', background:darkMode?'#222':'#f5f5f5' }} />
+          <div ref={scrollContainerRef} style={{ height: '100%', overflowY: 'auto', padding: '8px 6px', background: darkMode ? '#1a1a1a' : '#eee', WebkitOverflowScrolling: 'touch' }} />
         )}
-
-        {/* PAGE MODE */}
         {!loading && !error && !scrollMode && (
-          <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', position:'relative' }}>
-            {/* Hover zones desktop */}
-            {!isMobile && <>
-              <div style={{ position:'absolute', left:0, top:0, width:'28%', height:'100%', zIndex:5, cursor:'w-resize', display:'flex', alignItems:'center', justifyContent:'flex-start', paddingLeft:'12px', opacity:0, transition:'opacity 0.2s' }}
-                onMouseEnter={e=>(e.currentTarget.style.opacity='1')} onMouseLeave={e=>(e.currentTarget.style.opacity='0')}
-                onClick={(e)=>{e.stopPropagation();if(currentPage>1)setCurrentPage(p=>p-1)}}>
-                <div style={{ background:'rgba(255,105,180,0.25)', backdropFilter:'blur(4px)', borderRadius:'50%', width:'52px', height:'52px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.4rem', color:'#FF1493', fontWeight:700 }}>◀</div>
-              </div>
-              <div style={{ position:'absolute', right:0, top:0, width:'28%', height:'100%', zIndex:5, cursor:'e-resize', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'12px', opacity:0, transition:'opacity 0.2s' }}
-                onMouseEnter={e=>(e.currentTarget.style.opacity='1')} onMouseLeave={e=>(e.currentTarget.style.opacity='0')}
-                onClick={(e)=>{e.stopPropagation();if(currentPage<totalPages)setCurrentPage(p=>p+1)}}>
-                <div style={{ background:'rgba(255,105,180,0.25)', backdropFilter:'blur(4px)', borderRadius:'50%', width:'52px', height:'52px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.4rem', color:'#FF1493', fontWeight:700 }}>▶</div>
-              </div>
-            </>}
-            <canvas ref={canvasRef} style={{ display:'block', maxWidth:'100%', maxHeight:'100%', boxShadow:'0 8px 40px rgba(255,20,147,0.18)', borderRadius:'6px', background:darkMode?'#111':'white' }} />
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
+            <div onClick={(e) => { e.stopPropagation(); if (currentPage > 1) setCurrentPage(p => p - 1) }}
+              style={{ position: 'absolute', left: 0, top: 0, width: '25%', height: '100%', cursor: 'pointer', display: 'flex', alignItems: 'center', paddingLeft: '8px', opacity: 0, transition: 'opacity 0.2s', zIndex: 5 }}
+              onMouseEnter={e => (e.currentTarget.style.opacity = '1')} onMouseLeave={e => (e.currentTarget.style.opacity = '0')}>
+              <div style={{ background: 'rgba(255,105,180,0.2)', borderRadius: '50%', width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#FF1493', fontSize: '1.2rem' }}>◀</div>
+            </div>
+            <div onClick={(e) => { e.stopPropagation(); if (currentPage < totalPages) setCurrentPage(p => p + 1) }}
+              style={{ position: 'absolute', right: 0, top: 0, width: '25%', height: '100%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '8px', opacity: 0, transition: 'opacity 0.2s', zIndex: 5 }}
+              onMouseEnter={e => (e.currentTarget.style.opacity = '1')} onMouseLeave={e => (e.currentTarget.style.opacity = '0')}>
+              <div style={{ background: 'rgba(255,105,180,0.2)', borderRadius: '50%', width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#FF1493', fontSize: '1.2rem' }}>▶</div>
+            </div>
+            <canvas ref={canvasRef} style={{ display: 'block', maxWidth: '100%', maxHeight: '100%', boxShadow: '0 4px 24px rgba(255,20,147,0.15)', borderRadius: '4px', background: darkMode ? '#111' : 'white' }} />
           </div>
         )}
       </div>
 
       {/* BOTTOM BAR - page mode */}
       {!loading && !error && !scrollMode && totalPages > 0 && (
-        <div style={{ background:barBg, borderTop:`2px solid ${barBorder}`, padding:'10px 16px', display:'flex', alignItems:'center', justifyContent:'center', gap:'12px', flexShrink:0,
-          transition:'opacity 0.3s, transform 0.3s', opacity:showControls?1:0, transform:showControls?'translateY(0)':'translateY(100%)', pointerEvents:showControls?'auto':'none' }}
-          onClick={e=>e.stopPropagation()}>
-          <button className="btn-pink" onClick={()=>goTo(currentPage-1)} disabled={currentPage<=1} style={{ padding:'9px 18px', opacity:currentPage<=1?0.4:1, fontSize:'0.9rem' }}>← Prev</button>
-          <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
-            <span style={{ fontWeight:700, color:'#FF1493', fontSize:'0.85rem' }}>Page</span>
-            <input type="number" value={currentPage} onChange={e=>goTo(parseInt(e.target.value)||1)}
-              style={{ width:'52px', textAlign:'center', border:'2px solid #FFB6C1', borderRadius:'8px', padding:'6px 4px', fontWeight:700, color:'#4A1942', fontSize:'0.9rem' }} min={1} max={totalPages} />
-            <span style={{ fontWeight:700, color:'#FF1493', fontSize:'0.85rem' }}>/ {totalPages}</span>
+        <div style={{ background: barBg, borderTop: `1px solid ${border}`, backdropFilter: 'blur(8px)', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', flexShrink: 0, zIndex: 60, transition: 'transform 0.3s,opacity 0.3s', transform: showBars ? 'translateY(0)' : 'translateY(100%)', opacity: showBars ? 1 : 0, pointerEvents: showBars ? 'auto' : 'none' }} onClick={e => e.stopPropagation()}>
+          <button className="btn-pink" onClick={() => goTo(currentPage - 1)} disabled={currentPage <= 1} style={{ padding: '9px 18px', opacity: currentPage <= 1 ? 0.4 : 1 }}>← Prev</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <input type="number" value={currentPage} onChange={e => goTo(parseInt(e.target.value) || 1)} style={{ width: '50px', textAlign: 'center', border: '2px solid #FFB6C1', borderRadius: '8px', padding: '5px 3px', fontWeight: 700, color: '#4A1942', fontSize: '0.9rem' }} min={1} max={totalPages} />
+            <span style={{ fontWeight: 700, color: '#FF1493', fontSize: '0.85rem' }}>/ {totalPages}</span>
           </div>
-          <button className="btn-pink" onClick={()=>goTo(currentPage+1)} disabled={currentPage>=totalPages} style={{ padding:'9px 18px', opacity:currentPage>=totalPages?0.4:1, fontSize:'0.9rem' }}>Next →</button>
+          <button className="btn-pink" onClick={() => goTo(currentPage + 1)} disabled={currentPage >= totalPages} style={{ padding: '9px 18px', opacity: currentPage >= totalPages ? 0.4 : 1 }}>Next →</button>
         </div>
       )}
 
-      {/* Floating page indicator in scroll mode */}
+      {/* FLOATING BOTTOM PANEL - scroll mode */}
       {!loading && !error && scrollMode && totalPages > 0 && (
-        <div style={{ position:'fixed', bottom:'20px', right:'16px', background:'rgba(255,20,147,0.88)', color:'white', borderRadius:'20px', padding:'6px 14px', fontSize:'0.8rem', fontWeight:700, zIndex:50, pointerEvents:'none', backdropFilter:'blur(4px)' }}>
-          {currentPage} / {totalPages} · {pct}%
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 70, background: barBg, borderTop: `1px solid ${border}`, backdropFilter: 'blur(10px)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px', transition: 'transform 0.3s', transform: showBars ? 'translateY(0)' : 'translateY(100%)' }} onClick={e => e.stopPropagation()}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#FF1493' }}>p.</span>
+            <input type="number" value={currentPage} onChange={e => goTo(parseInt(e.target.value) || 1)} style={{ width: '42px', textAlign: 'center', border: '2px solid #FFB6C1', borderRadius: '7px', padding: '3px 2px', fontWeight: 700, color: '#4A1942', fontSize: '0.8rem' }} min={1} max={totalPages} />
+            <span style={{ fontSize: '0.68rem', color: '#FF91A4' }}>/{totalPages}</span>
+          </div>
+          <div style={{ flex: 1, height: '5px', background: '#FFD6E7', borderRadius: '3px', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#FF69B4,#FF1493)', transition: 'width 0.5s' }} />
+          </div>
+          <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#FF1493', flexShrink: 0 }}>{pct}%</span>
+          <button onClick={() => { setShowPanel(v => !v) }} style={{ background: '#FFD6E7', border: 'none', borderRadius: '8px', padding: '6px 8px', cursor: 'pointer', fontSize: '0.85rem', flexShrink: 0 }}>☰</button>
         </div>
       )}
 
-      {/* Mobile hint */}
-      {isMobile && !scrollMode && !loading && !error && showControls && (
-        <div style={{ position:'fixed', bottom:'70px', left:'50%', transform:'translateX(-50%)', background:'rgba(255,105,180,0.75)', color:'white', borderRadius:'12px', padding:'5px 14px', fontSize:'0.72rem', fontWeight:700, zIndex:50, pointerEvents:'none', whiteSpace:'nowrap', backdropFilter:'blur(4px)' }}>
-          👈 Tap sides or swipe to turn pages
+      {/* SIDE PANEL */}
+      {showPanel && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.3)' }} onClick={() => setShowPanel(false)}>
+          <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '210px', background: barBg, borderLeft: `2px solid ${border}`, padding: '18px 14px', display: 'flex', flexDirection: 'column', gap: '10px', backdropFilter: 'blur(12px)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <span className="font-pacifico" style={{ color: '#FF1493', fontSize: '1rem' }}>Menu 🎀</span>
+              <button onClick={() => setShowPanel(false)} style={{ background: 'none', border: 'none', fontSize: '1.1rem', cursor: 'pointer', color: '#FF69B4' }}>✕</button>
+            </div>
+            {[
+              { label: saveBtnStyle.label, action: () => { saveProgress(false); setShowPanel(false) }, bg: saveBtnStyle.bg, color: saveBtnStyle.color },
+              { label: scrollMode ? '📄 Page Mode' : '📜 Scroll Mode', action: () => { switchMode(); setShowPanel(false) }, bg: '#FFD6E7', color: '#4A1942' },
+              { label: darkMode ? '☀️ Light Mode' : '🌙 Dark Mode', action: () => { setDarkMode(!darkMode); setShowPanel(false) }, bg: '#FFD6E7', color: '#4A1942' },
+              { label: fullscreen ? '⊠ Exit Fullscreen' : '⛶ Fullscreen', action: () => { toggleFullscreen(); setShowPanel(false) }, bg: '#FFD6E7', color: '#4A1942' },
+              { label: '← Back to Book', action: () => router.back(), bg: '#FFD6E7', color: '#4A1942' },
+            ].map((btn, i) => (
+              <button key={i} onClick={btn.action} style={{ background: btn.bg, color: btn.color, border: 'none', borderRadius: '10px', padding: '11px', cursor: 'pointer', fontWeight: 700, fontSize: '0.88rem', fontFamily: 'Nunito,sans-serif', textAlign: 'left', transition: 'all 0.2s' }}>
+                {btn.label}
+              </button>
+            ))}
+            {book && <div style={{ marginTop: 'auto', padding: '10px', background: '#FFF0F5', borderRadius: '8px' }}><p style={{ fontSize: '0.72rem', color: '#4A1942', lineHeight: 1.4 }}>{book.title}</p></div>}
+          </div>
         </div>
       )}
+
+      <style>{`@keyframes fadeOut { from{opacity:1} to{opacity:0} }`}</style>
     </div>
   )
 }
 
 export default function ReaderPage({ params }: { params: { id: string } }) {
   return (
-    <Suspense fallback={<div style={{height:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#FFF0F5'}}><div style={{textAlign:'center'}}><div style={{fontSize:'4rem'}} className="heart-float">🌸</div><p className="font-pacifico" style={{color:'#FF1493',marginTop:'12px'}}>Loading...</p></div></div>}>
+    <Suspense fallback={<div style={{height:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#FFF0F5'}}><div style={{textAlign:'center'}}><div style={{fontSize:'3rem'}} className="heart-float">🌸</div><p className="font-pacifico" style={{color:'#FF1493',marginTop:'12px'}}>Loading...</p></div></div>}>
       <ReaderContent id={params.id} />
     </Suspense>
   )
