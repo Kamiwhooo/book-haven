@@ -4,7 +4,7 @@ import Navbar from './Navbar'
 
 export default function NavbarWrapper() {
   const pathname = usePathname()
-  // Hide navbar completely on reader pages
-  if (pathname?.startsWith('/read/')) return null
+  // Hide navbar on reader and link pages
+  if (pathname?.startsWith('/read/') || pathname?.startsWith('/link')) return null
   return <Navbar />
 }
