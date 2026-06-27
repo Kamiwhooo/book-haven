@@ -15,6 +15,7 @@ export default function BookDetailsPage({ params }: { params: { id: string } }) 
   const [loading, setLoading] = useState(true)
   const [descExpanded, setDescExpanded] = useState(false)
   const [progress, setProgress] = useState<{ current_page: number; total_pages: number } | null>(null)
+  const [saveStatus, setSaveStatus] = useState<'idle'|'saving'|'saved'|'error'>('idle')
   const { user } = useAuth()
   const router = useRouter()
 
@@ -28,17 +29,39 @@ export default function BookDetailsPage({ params }: { params: { id: string } }) 
       .then(({ data: bd }) => {
         if (!bd) return
         supabase.from('user_books').select('current_page, total_pages').eq('user_id', user.id).eq('book_id', bd.id).single()
-          .then(({ data: ub }) => { if (ub) setProgress(ub) })
+          .then(({ data: ub }) => { if (ub) { setProgress(ub); setSaveStatus('saved') } })
       })
   }, [user, book])
 
-  if (loading) return <div style={{ display:'flex', justifyContent:'center', alignItems:'center', minHeight:'60vh', background:'#FFF0F5' }}><div style={{ textAlign:'center' }}><div style={{ fontSize:'3rem' }} className="heart-float">🌸</div><p className="font-pacifico" style={{ color:'#FF1493', marginTop:'12px' }}>Loading...</p></div></div>
+  const handleSave = async () => {
+    if (!user) { router.push('/login'); return }
+    if (!book) return
+    setSaveStatus('saving')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/progress', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          book, current_page: progress?.current_page || 1,
+          total_pages: progress?.total_pages || book.pages || 0,
+          user_id: user.id, access_token: session?.access_token,
+        }),
+      })
+      if (res.ok) { setSaveStatus('saved') }
+      else { setSaveStatus('error'); setTimeout(() => setSaveStatus('idle'), 3000) }
+    } catch { setSaveStatus('error'); setTimeout(() => setSaveStatus('idle'), 3000) }
+  }
 
+  if (loading) return <div style={{ display:'flex', justifyContent:'center', alignItems:'center', minHeight:'60vh', background:'#FFF0F5' }}><div style={{ textAlign:'center' }}><div style={{ fontSize:'3rem' }} className="heart-float">🌸</div><p className="font-pacifico" style={{ color:'#FF1493', marginTop:'12px' }}>Loading...</p></div></div>
   if (!book) return <div style={{ textAlign:'center', padding:'60px 24px', background:'#FFF0F5', minHeight:'60vh' }}><div style={{ fontSize:'3rem', marginBottom:'12px' }}>😢</div><h2 className="font-pacifico" style={{ color:'#FF1493' }}>Book not found</h2><button className="btn-pink" onClick={() => router.push('/')} style={{ marginTop:'20px' }}>Go Home 🎀</button></div>
 
   const desc = book.description || 'No description available.'
   const shortDesc = desc.length > 250 ? desc.slice(0, 250) + '...' : desc
   const pct = progress ? Math.round((progress.current_page / (progress.total_pages || 1)) * 100) : 0
+
+  const saveBtnLabel = saveStatus === 'saving' ? '⏳ Saving...' : saveStatus === 'saved' ? '✅ Saved to Library' : saveStatus === 'error' ? '❌ Try Again' : '🔖 Save to Library'
+  const saveBtnBg = saveStatus === 'saved' ? 'linear-gradient(135deg,#FF69B4,#FF1493)' : saveStatus === 'error' ? '#FFD6E7' : 'white'
+  const saveBtnColor = saveStatus === 'saved' ? 'white' : saveStatus === 'error' ? '#C7006E' : '#FF1493'
 
   return (
     <div style={{ minHeight:'100vh', background:'#FFF0F5' }}>
@@ -49,15 +72,18 @@ export default function BookDetailsPage({ params }: { params: { id: string } }) 
       <div style={{ maxWidth:'860px', margin:'0 auto', padding:'0 16px 60px' }}>
         <div style={{ display:'flex', gap:'24px', alignItems:'flex-start', flexWrap:'wrap' }}>
           {/* Cover */}
-          <div style={{ width:'160px', flexShrink:0, margin:'0 auto' }}>
+          <div style={{ width:'180px', flexShrink:0, margin:'0 auto' }}>
             <img src={book.cover_url} alt={book.title}
               style={{ width:'100%', borderRadius:'12px', boxShadow:'0 8px 30px rgba(255,20,147,0.2)' }}
-              onError={(e) => { (e.target as HTMLImageElement).src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYwIiBoZWlnaHQ9IjIyNCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTYwIiBoZWlnaHQ9IjIyNCIgZmlsbD0iI0ZGRDBFNyIvPjx0ZXh0IHg9IjgwIiB5PSIxMjAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iNDgiPvCfjJw8L3RleHQ+PC9zdmc+' }}
+              onError={(e) => { (e.target as HTMLImageElement).src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTgwIiBoZWlnaHQ9IjI1MiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTgwIiBoZWlnaHQ9IjI1MiIgZmlsbD0iI0ZGRDBFNyIvPjx0ZXh0IHg9IjkwIiB5PSIxMzYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iNTAiPvCfjJw8L3RleHQ+PC9zdmc+' }}
             />
+
+            {/* Action buttons */}
             <div style={{ marginTop:'14px', display:'flex', flexDirection:'column', gap:'10px' }}>
               {progress ? (
                 <>
-                  <button className="btn-pink" style={{ width:'100%' }} onClick={() => router.push(`/read/${book.archive_id}?page=${progress.current_page}`)}>
+                  <button className="btn-pink" style={{ width:'100%' }}
+                    onClick={() => router.push(`/read/${book.archive_id}?page=${progress.current_page}`)}>
                     📖 Continue (p.{progress.current_page})
                   </button>
                   <div>
@@ -66,10 +92,26 @@ export default function BookDetailsPage({ params }: { params: { id: string } }) 
                   </div>
                 </>
               ) : (
-                <button className="btn-pink" style={{ width:'100%' }} onClick={() => { if (!user) { router.push('/login'); return }; router.push(`/read/${book.archive_id}`) }}>
+                <button className="btn-pink" style={{ width:'100%' }}
+                  onClick={() => { if (!user) { router.push('/login'); return }; router.push(`/read/${book.archive_id}`) }}>
                   ✨ Read Now
                 </button>
               )}
+
+              {/* Save to library button */}
+              <button
+                onClick={handleSave}
+                disabled={saveStatus === 'saving' || saveStatus === 'saved'}
+                style={{
+                  width:'100%', background:saveBtnBg, color:saveBtnColor,
+                  border:`2px solid ${saveStatus === 'saved' ? '#FF1493' : '#FFD6E7'}`,
+                  borderRadius:'50px', padding:'11px', fontWeight:700,
+                  cursor: saveStatus === 'saved' ? 'default' : 'pointer',
+                  fontSize:'0.88rem', fontFamily:'Nunito,sans-serif',
+                  transition:'all 0.3s',
+                }}>
+                {saveBtnLabel}
+              </button>
             </div>
           </div>
 

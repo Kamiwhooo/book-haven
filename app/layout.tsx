@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { AuthProvider } from '@/context/AuthContext'
-import Navbar from '@/components/Navbar'
+import NavbarWrapper from '@/components/NavbarWrapper'
 
 export const metadata: Metadata = {
   title: 'Book Haven 🎀 - Your Cute Reading Paradise',
@@ -16,7 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <AuthProvider>
-          <Navbar />
+          <NavbarWrapper />
           <main>{children}</main>
         </AuthProvider>
       </body>
