@@ -120,8 +120,18 @@ function ReaderContent({ id }: { id: string }) {
         ctx.filter = 'none' // dark mode via CSS
         await page.render({ canvasContext: ctx, viewport: vp }).promise
         setPagesRendered(i)
-        if (i === Math.min(startPage, 3) && startPage > 1)
-          setTimeout(() => container.querySelector(`[data-page="${startPage}"]`)?.scrollIntoView(), 100)
+        // Jump to saved page exactly when that page finishes rendering
+        if (i === startPage && startPage > 1) {
+          // Try immediately, then retry to ensure DOM is ready
+          setTimeout(() => {
+            const el = container.querySelector(`[data-page="${startPage}"]`)
+            if (el) el.scrollIntoView({ block: 'start' })
+          }, 200)
+          setTimeout(() => {
+            const el = container.querySelector(`[data-page="${startPage}"]`)
+            if (el) el.scrollIntoView({ block: 'start' })
+          }, 800)
+        }
       } catch {}
     }
     scrollRenderRef.current = false
