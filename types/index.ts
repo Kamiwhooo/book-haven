@@ -1,5 +1,5 @@
 export interface Book {
-  id: string
+  id?: string
   archive_id: string
   title: string
   author: string | null
@@ -9,6 +9,11 @@ export interface Book {
   pages: number | null
   published_date: string | null
   created_at?: string
+  // Extended fields for multi-source search
+  has_pdf?: boolean
+  borrow_only?: boolean
+  web_url?: string
+  source?: 'archive' | 'bookfrom' | 'link'
 }
 
 export interface UserBook {
@@ -30,11 +35,4 @@ export interface ArchiveSearchResult {
   description?: string | string[]
   date?: string
   num_pages?: number
-}
-
-export interface SearchResponse {
-  response: {
-    docs: ArchiveSearchResult[]
-    numFound: number
-  }
 }

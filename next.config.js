@@ -1,10 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
-    domains: ['archive.org', 'ia800107.us.archive.org'],
     remotePatterns: [
       { protocol: 'https', hostname: '*.archive.org' },
       { protocol: 'https', hostname: 'archive.org' },
+      { protocol: 'https', hostname: 'picture.bookfrom.net' },
     ],
   },
   async headers() {
@@ -13,10 +13,15 @@ const nextConfig = {
         source: '/api/:path*',
         headers: [
           { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
         ],
       },
-    ];
+    ]
   },
-};
+  // Increase serverless function timeout for PDF proxy
+  experimental: {
+    serverActions: { bodySizeLimit: '10mb' },
+  },
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig
